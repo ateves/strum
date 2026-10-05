@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Single Player BattleShip 10x10</title>
+<style>
+  :root {
+    --bg-top:#0a1930; --bg-bot:#13376b; --ink:#eaf4ff;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; }
+  html,body{ margin:0; height:100%; background:var(--bg-bot); overflow:hidden; }
+  body{
+    display:flex; align-items:center; justify-content:center;
+    font-family: Arial, Helvetica, sans-serif; color:var(--ink);
+    background: linear-gradient(180deg, var(--bg-top), var(--bg-bot));
+  }
+  #wrap{ display:flex; flex-direction:column; align-items:center; gap:6px; max-width:100%; padding:10px; }
+  h1{ margin:4px 0 0; font-size:clamp(18px,4vw,28px); text-align:center;
+      text-shadow:0 2px 4px rgba(0,0,0,.6); }
+  .sub{ opacity:.8; font-size:13px; margin-bottom:4px; }
+  #msg{ font-size:15px; min-height:20px; text-align:center; }
+  #shots{ font-size:13px; opacity:.85; margin-bottom:4px; }
+  canvas{ touch-action:none; max-width:100%; height:auto; border-radius:6px;
+          box-shadow:0 8px 30px rgba(0,0,0,.5); }
+  button{
+    margin-top:4px; padding:8px 18px; border-radius:20px; border:none;
+    background:#ffb020; color:#1a1a1a; font-weight:bold; font-size:14px;
+    cursor:pointer; box-shadow:0 3px 10px rgba(0,0,0,.4);
+  }
+  button:active{ transform:translateY(1px); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1 id="title">SINGLE PLAYER BATTLESHIP</h1>
+  <div class="sub">by Anthony Teves — click a square to fire</div>
+  <canvas id="c" width="560" height="620"></canvas>
+  <div id="msg">Try to find the ship to sink!</div>
+  <div id="shots">Shots fired: 0</div>
+  <button id="again">Play Again (R)</button>
+  <button id="mute">🔊 Music On</button>
+</div>
+<script>
+const GRID=10, CELL=50, MX=60, MY=40;
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+const msgEl=document.getElementById('msg'), shotsEl=document.getElementById('shots'), titleEl=document.getElementById('title');
+
+function randInt(n){ return Math.floor(Math.random()*n); }
+function easeOutBack(x){ const c1=1.70158,c3=c1+1; return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,2); }
+
+let board, shipRow, shipCol, notHit, shots, t0, shake, particles, confetti, hover=-1;
+
+function reset(){
+  board=[]; for(let r=0;r<GRID;r++){ let row=[]; for(let c=0;c<GRID;c++) row.push({state:'water', pop:1, phase:(r+c)*0.6}); board.push(row); }
+  shipRow=randInt(GRID); shipCol=randInt(GRID);
+  notHit=true; shots=0; shake=0; particles=[]; confetti=[];
+  msgEl.textContent='Try to find the ship to sink!'; shotsEl.textContent='Shots fired: 0';
+}
+reset();
+
+function cellRect(r,c){ return {x:MX+c*CELL, y:MY+r*CELL, w:CELL, h:CELL}; }
+
+function fire(r,c){
+  startMusic();
+  if(!notHit) return;
+  const cell=board[r][c];
+  if(cell.state!=='water') return;
+  shots++; shotsEl.textContent='Shots fired: '+shots;
+  const rc=cellRect(r,c), cx=rc.x+CELL/2, cy=rc.y+CELL/2;
+  if(r===shipRow && c===shipCol){
+    cell.state='hit'; cell.pop=0; notHit=false; shake=0.5;
+    msgEl.textContent='Congratulations! You sank my battleship!';
+    for(let i=0;i<40;i++) particles.push(makeSpark(cx,cy));
+    for(let i=0;i<120;i++) confetti.push(makeConfetti());
+    cannonBoom();
+  } else {
+    cell.state='miss'; cell.pop=0;
+    msgEl.textContent='You missed my battleship!';
+    for(let i=0;i<10;i++) particles.push(makeSplash(cx,cy));
+    splashSound();
+  }
+}
+
+function makeSpark(x,y){
+  const a=Math.random()*Math.PI*2, s=80+Math.random()*240;
+  return {type:'spark', x,y, vx:Math.cos(a)*s, vy:Math.sin(a)*s,
+    life:0.5+Math.random()*0.5, maxLife:1,
+    color:['#ffdc3c','#ff8c00','#ff5028'][randInt(3)]};
+}
+function makeSplash(x,y){
+  const a=Math.random()*Math.PI*2, d=10+Math.random()*20;
+  return {type:'splash', x:x+Math.cos(a)*4, y:y+Math.sin(a)*4, a, d, t:0, cx:x, cy:y};
+}
+function makeConfetti(){
+  return {x:Math.random()*cv.width, y:-20-Math.random()*200,
+    vy:80+Math.random()*140, sway:Math.random()*6.28,
+    w:6+Math.random()*4, h:10+Math.random()*6,
+    color:['#ff5050','#ffc828','#5adc78','#50aaff','#dc6eff'][randInt(5)]};
+}
+
+function update(dt,t){
+  shake=Math.max(0, shake-dt);
+  for(const row of board) for(const cell of row) cell.pop=Math.min(1, cell.pop+dt*3);
+  particles=particles.filter(p=>{
+    if(p.type==='spark'){ p.life-=dt; p.vy+=500*dt; p.x+=p.vx*dt; p.y+=p.vy*dt; return p.life>0; }
+    else { p.t+=dt*2.2; return p.t<1; }
+  });
+  confetti=confetti.filter(f=>{ f.y+=f.vy*dt; f.sway+=4*dt; return f.y<cv.height+20; });
+  if(!notHit && Math.random()<0.35) confetti.push(makeConfetti());
+}
+
+function drawShip(x,y,t){
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle='#46495a';
+  ctx.beginPath(); ctx.moveTo(6,28); ctx.lineTo(44,28); ctx.lineTo(38,40); ctx.lineTo(12,40); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#bec3cd'; ctx.fillRect(16,19,18,9);
+  ctx.fillStyle='#dc3c32'; ctx.fillRect(22,10,6,9);
+  const flick=3*Math.sin(t*25);
+  ctx.fillStyle='#ff8c00'; ctx.beginPath(); ctx.arc(25,8,7+flick,0,7); ctx.fill();
+  ctx.fillStyle='#ffdc3c'; ctx.beginPath(); ctx.arc(25,9,4+flick/2,0,7); ctx.fill();
+  ctx.restore();
+}
+
+function draw(t){
+  ctx.save();
+  const ox=(Math.random()*2-1)*shake*18, oy=(Math.random()*2-1)*shake*18;
+  ctx.translate(ox,oy);
+
+  // background gradient
+  const g=ctx.createLinearGradient(0,0,0,cv.height);
+  g.addColorStop(0,'#0a1930'); g.addColorStop(1,'#13376b');
+  ctx.fillStyle=g; ctx.fillRect(-30,-30,cv.width+60,cv.height+60);
+
+  // column / row numbers
+  ctx.fillStyle='#c8e1ff'; ctx.font='bold 13px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  for(let i=0;i<GRID;i++){
+    ctx.fillText(i+1, MX+i*CELL+CELL/2, MY-16);
+    ctx.fillText(i+1, MX-24, MY+i*CELL+CELL/2);
+  }
+
+  // cells
+  for(let r=0;r<GRID;r++) for(let c=0;c<GRID;c++){
+    const cell=board[r][c], rc=cellRect(r,c);
+    const wave=(Math.sin(t*2+cell.phase)+1)/2;
+    let br=20+25*wave, bg=95+55*wave, bb=165+50*wave;
+    if(cell.state==='miss'){ br*=0.65; bg*=0.65; bb*=0.65; }
+    const isHover = hover===r*GRID+c && cell.state==='water' && notHit;
+    if(isHover){ br=Math.min(255,br+45); bg=Math.min(255,bg+45); bb=Math.min(255,bb+45); }
+    ctx.fillStyle=`rgb(${br|0},${bg|0},${bb|0})`;
+    ctx.fillRect(rc.x,rc.y,rc.w,rc.h);
+    ctx.strokeStyle=`rgb(${Math.min(255,br+60)|0},${Math.min(255,bg+60)|0},${Math.min(255,bb+60)|0})`;
+    ctx.lineWidth=2; ctx.beginPath();
+    for(let x=6;x<CELL-5;x+=4){
+      const px=rc.x+x, py=rc.y+CELL/2+4*Math.sin(t*3+cell.phase+x*0.2);
+      if(x===6) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+    }
+    ctx.stroke();
+
+    if(cell.state==='miss'){
+      const sz=14*easeOutBack(cell.pop), cx=rc.x+CELL/2, cy=rc.y+CELL/2;
+      ctx.strokeStyle='#ff5a5a'; ctx.lineWidth=6;
+      ctx.beginPath(); ctx.moveTo(cx-sz,cy-sz); ctx.lineTo(cx+sz,cy+sz); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx-sz,cy+sz); ctx.lineTo(cx+sz,cy-sz); ctx.stroke();
+    } else if(cell.state==='hit'){
+      drawShip(rc.x,rc.y,t);
+    }
+
+    ctx.strokeStyle='#0a2850'; ctx.lineWidth=1; ctx.strokeRect(rc.x,rc.y,rc.w,rc.h);
+    if(isHover){ ctx.strokeStyle='#fff078'; ctx.lineWidth=3; ctx.strokeRect(rc.x+1.5,rc.y+1.5,rc.w-3,rc.h-3); }
+  }
+
+  // particles
+  for(const p of particles){
+    if(p.type==='spark'){
+      ctx.globalAlpha=Math.max(0,p.life/p.maxLife);
+      ctx.fillStyle=p.color; ctx.beginPath(); ctx.arc(p.x,p.y,3,0,7); ctx.fill();
+      ctx.globalAlpha=1;
+    } else {
+      ctx.globalAlpha=Math.max(0,1-p.t);
+      ctx.strokeStyle='#aee6ff'; ctx.lineWidth=2;
+      const d=p.d*p.t, lift=Math.sin(p.t*Math.PI)*8;
+      ctx.beginPath(); ctx.arc(p.cx+Math.cos(p.a)*d, p.cy+Math.sin(p.a)*d-lift, 2.5*(1-p.t), 0, 7); ctx.stroke();
+      ctx.globalAlpha=1;
+    }
+  }
+
+  // confetti
+  for(const f of confetti){
+    ctx.save(); ctx.translate(f.x+Math.sin(f.sway)*30, f.y);
+    ctx.fillStyle=f.color; ctx.fillRect(-f.w/2,-f.h/2,f.w,f.h); ctx.restore();
+  }
+
+  // title color cycle + win text
+  const hue=(t*60)%360;
+  titleEl.style.color=`hsl(${hue},70%,70%)`;
+  if(!notHit){
+    ctx.font='bold 38px Arial'; ctx.fillStyle=`hsl(${hue},75%,70%)`; ctx.textAlign='center';
+    ctx.fillText('YOU WIN!', cv.width/2, cv.height-30+Math.sin(t*4)*6);
+  }
+
+  ctx.restore();
+}
+
+function pointToCell(x,y){
+  const rect=cv.getBoundingClientRect();
+  const sx=(x-rect.left)*(cv.width/rect.width), sy=(y-rect.top)*(cv.height/rect.height);
+  const c=Math.floor((sx-MX)/CELL), r=Math.floor((sy-MY)/CELL);
+  if(r<0||r>=GRID||c<0||c>=GRID) return -1;
+  return r*GRID+c;
+}
+cv.addEventListener('mousemove', e=>{ hover=pointToCell(e.clientX,e.clientY); });
+cv.addEventListener('mouseleave', ()=>{ hover=-1; });
+cv.addEventListener('click', e=>{
+  const i=pointToCell(e.clientX,e.clientY);
+  if(i>=0) fire(Math.floor(i/GRID), i%GRID);
+});
+cv.addEventListener('touchstart', e=>{
+  e.preventDefault();
+  const touch=e.changedTouches[0];
+  const i=pointToCell(touch.clientX,touch.clientY);
+  if(i>=0) fire(Math.floor(i/GRID), i%GRID);
+}, {passive:false});
+window.addEventListener('keydown', e=>{ if(e.key==='r'||e.key==='R') reset(); });
+document.getElementById('again').addEventListener('click', reset);
+
+// ---------- Pirate music & sound effects (all synthesized, no audio files) ----------
+let actx=null, musicOn=true, musicStarted=false, nextNoteTime=0, noteIndex=0;
+const muteBtn=document.getElementById('mute');
+
+// A jaunty minor-key jig: [frequency Hz, beats]. 0 = rest.
+const SCALE = {A3:220.00,C4:261.63,D4:293.66,E4:329.63,F4:349.23,G4:392.00,A4:440.00,C5:523.25,D5:587.33};
+const MELODY = [
+  [SCALE.A4,1],[SCALE.C5,1],[SCALE.D5,1],[SCALE.C5,1],
+  [SCALE.A4,1],[SCALE.G4,1],[SCALE.A4,2],
+  [SCALE.A4,1],[SCALE.C5,1],[SCALE.D5,1],[SCALE.E4,1],
+  [SCALE.F4,1],[SCALE.E4,1],[SCALE.D4,2],
+  [SCALE.D4,1],[SCALE.F4,1],[SCALE.A4,1],[SCALE.G4,1],
+  [SCALE.F4,1],[SCALE.E4,1],[SCALE.D4,2],
+  [SCALE.A3,1],[SCALE.C4,1],[SCALE.E4,1],[SCALE.A4,1],
+  [SCALE.G4,1],[SCALE.F4,1],[SCALE.E4,2],
+];
+const BEAT=0.26;
+
+function ensureAudio(){
+  if(!actx) actx=new (window.AudioContext||window.webkitAudioContext)();
+  if(actx.state==='suspended') actx.resume();
+}
+function pluck(freq,time,dur,type,vol){
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.type=type; o.frequency.value=freq;
+  g.gain.setValueAtTime(0.0001,time);
+  g.gain.exponentialRampToValueAtTime(vol,time+0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001,time+dur);
+  o.connect(g); g.connect(actx.destination);
+  o.start(time); o.stop(time+dur+0.02);
+}
+function scheduleMusic(){
+  if(!musicOn) return;
+  while(nextNoteTime < actx.currentTime+0.5){
+    const [freq,beats]=MELODY[noteIndex%MELODY.length];
+    const dur=beats*BEAT*0.9;
+    pluck(freq,nextNoteTime,dur,'triangle',0.08);        // lead (fiddle-ish)
+    if(noteIndex%4===0) pluck(freq/2,nextNoteTime,beats*BEAT*0.8,'sawtooth',0.05); // bass accordion
+    nextNoteTime += beats*BEAT;
+    noteIndex++;
+  }
+}
+function startMusic(){
+  if(musicStarted) return; musicStarted=true;
+  ensureAudio(); nextNoteTime=actx.currentTime+0.1;
+}
+function cannonBoom(){
+  ensureAudio();
+  const dur=0.35, bufferSize=actx.sampleRate*dur;
+  const buf=actx.createBuffer(1,bufferSize,actx.sampleRate), data=buf.getChannelData(0);
+  for(let i=0;i<bufferSize;i++) data[i]=(Math.random()*2-1)*Math.pow(1-i/bufferSize,2);
+  const src=actx.createBufferSource(); src.buffer=buf;
+  const filt=actx.createBiquadFilter(); filt.type='lowpass'; filt.frequency.value=500;
+  const g=actx.createGain(); g.gain.value=0.35;
+  src.connect(filt); filt.connect(g); g.connect(actx.destination);
+  src.start();
+  pluck(80,actx.currentTime,0.4,'sine',0.3);
+}
+function splashSound(){
+  ensureAudio();
+  const dur=0.25, bufferSize=actx.sampleRate*dur;
+  const buf=actx.createBuffer(1,bufferSize,actx.sampleRate), data=buf.getChannelData(0);
+  for(let i=0;i<bufferSize;i++) data[i]=(Math.random()*2-1)*Math.pow(1-i/bufferSize,1.5);
+  const src=actx.createBufferSource(); src.buffer=buf;
+  const filt=actx.createBiquadFilter(); filt.type='bandpass'; filt.frequency.value=1800; filt.Q.value=0.6;
+  const g=actx.createGain(); g.gain.value=0.18;
+  src.connect(filt); filt.connect(g); g.connect(actx.destination);
+  src.start();
+}
+muteBtn.addEventListener('click', ()=>{
+  musicOn=!musicOn;
+  muteBtn.textContent = musicOn ? '🔊 Music On' : '🔇 Music Off';
+  if(musicOn){ ensureAudio(); nextNoteTime=actx.currentTime+0.1; }
+});
+
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  const t=now/1000;
+  update(dt,t); draw(t);
+  if(musicStarted && musicOn) scheduleMusic();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
